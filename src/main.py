@@ -94,7 +94,7 @@ if __name__ == "__main__":
     # print(json.dumps(data, ensure_ascii=False, indent=4))
 
     client = OpenAI(
-        base_url = "https://api.siliconflow.cn/v1",
+        base_url = os.getenv("OPENAI_API_URL"),
         api_key = os.getenv("OPENAI_API_KEY")
     )
     data = parse_category(data, client)
