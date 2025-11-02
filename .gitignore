@@ -1,0 +1,8 @@
+bill/*
+output/*
+.vscode/*
+__pycache__/*
+*.pyc
+.env
+
+.DS_Store
