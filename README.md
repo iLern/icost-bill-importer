@@ -15,7 +15,7 @@ launchd 每天定时
         ├─ mail_input.fetch_bill_mail    # IMAP 读 QQ 邮箱账单邮件
         ├─ mail_input.parse_mail_body    # 正则解析为交易记录
         ├─ main.parse_category           # 复用 LLM 分类
-        ├─ icost_output.to_icost_urls    # 生成 iCost:// URL
+        ├─ icost_output.to_icost_urls    # 生成 icost:// URL
         └─ icost_output.trigger          # open 触发 iCost
 ```
 
@@ -25,7 +25,7 @@ launchd 每天定时
    - `MAIL_USER` / `MAIL_AUTHCODE`：QQ 邮箱地址与 **IMAP 授权码**（非登录密码。获取：QQ 邮箱网页端 → 设置 → 账户 → 开启 IMAP/SMTP 服务 → 生成授权码）。
    - `OPENAI_API_URL` / `OPENAI_API_KEY`：与 `main.py` 共用的 LLM 配置。
 
-2. 卡号 → iCost 账户名映射在 `src/config.json` 的 `card_account_map`。当前 mock 用卡号本身（如 `9006`）当账户名，确认 iCost 能否据此路由后再调整。
+2. 卡号 → iCost 账户名映射在 `src/config.json` 的 `card_account_map`。**账户名必须与 iCost 内已存在的账户名逐字一致**，否则 iCost 会静默忽略请求。iCost 注册的 URL scheme 是小写 `icost`（大小写敏感）。
 
 ### 安装
 

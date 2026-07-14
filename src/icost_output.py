@@ -1,11 +1,34 @@
 """iCost 输出模块：把交易记录转成 iCost x-callback-url 并触发。
 
-iCost://expense?[...]  消费
-iCost://income?[...]   退款（作为收入）
+注意：iCost 注册的 URL scheme 是小写 icost（大小写敏感，iCost:// 不会路由）。
+account 必须与 iCost 内存在的账户名逐字一致，否则 iCost 会静默忽略该请求。
+icost://expense?[...]  消费
+icost://income?[...]   退款（作为收入）
 """
 import subprocess
 import time
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
+
+
+# iCost 解析 URL query 时，账户名等参数中的空格必须原样保留
+# （编码成 %20 或 + 会导致账户名不匹配而被静默忽略）。
+# 但 & # = 等字符会破坏 query 结构，仍需编码；中文保留原样即可被接受。
+_UNSAFE = "&#=+%"
+
+
+def _icost_quote(value: str) -> str:
+    """编码会破坏 query 结构的字符（&#=+%），保留空格与中文原样。
+
+    iCost 解析 query 时，账户名里的空格若编码成 %20 或 +，会导致账户名不匹配
+    而被静默忽略；故空格保留原样。中文原样传入也能被接受。
+    """
+    out = []
+    for ch in str(value):
+        if ch in _UNSAFE:
+            out.append(f"%{ord(ch):02X}")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def to_icost_urls(records: list, card_account_map: dict = None) -> list:
@@ -35,9 +58,9 @@ def to_icost_urls(records: list, card_account_map: dict = None) -> list:
             "time": r["time"],
             "remark": r["description"],
         }
-        # iCost 期望中文以原始字符或编码均可，这里统一编码
-        query = urlencode(params, quote_via=quote)
-        urls.append(f"iCost://{scheme}?{query}")
+        # 空格与中文原样保留（见 _icost_quote 说明）
+        query = "&".join(f"{k}={_icost_quote(v)}" for k, v in params.items())
+        urls.append(f"icost://{scheme}?{query}")
     return urls
 
 
