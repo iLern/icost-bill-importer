@@ -3,6 +3,7 @@ import os
 from openai import OpenAI
 import pandas as pd
 from tqdm import tqdm
+import datetime
 
 def parse_bills(file_path):
     records = []
@@ -59,7 +60,7 @@ def reformat(record_list: list) -> list:
     for record in tqdm(record_list, desc="重格式化", unit="笔"):
         reformatted_record = {
             # 2011年01月11日 12:00:00
-            "日期": f"2025年{record['trans_date'][0:2]}月{record['trans_date'][-2:]}日 00:00:00",
+            "日期": f"{datetime.datetime.now().year}年{record['trans_date'][0:2]}月{record['trans_date'][-2:]}日 00:00:00",
             "类型": record["amount_value"] > 0 and "支出" or "收入",
             "金额": abs(record["amount_value"]),
             "一级分类": record["category"].split("/")[0] if "/" in record["category"] else record["category"],
