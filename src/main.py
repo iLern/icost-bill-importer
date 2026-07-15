@@ -36,7 +36,7 @@ def parse_category(bill_list: list, client: OpenAI) -> list:
         desc = record["description"].lower()
         tqdm.write(f"正在处理交易描述：{desc} --> ", end="")
         response = client.chat.completions.create(
-            model="Qwen/Qwen3-VL-235B-A22B-Instruct",
+            model=os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3.2"),
             messages=[
                 {
                     "role": "system",
