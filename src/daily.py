@@ -55,16 +55,35 @@ def main():
     if args.max > 0:
         records = records[: args.max]
 
-    # 2. LLM 分类（复用 main.parse_category）
-    base_url = os.getenv("OPENAI_API_URL")
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not base_url or not api_key:
-        print("错误：请在 .env 中配置 OPENAI_API_URL 和 OPENAI_API_KEY")
-        raise SystemExit(1)
-    client = OpenAI(base_url=base_url, api_key=api_key)
+    # 2. 分类：先按 config 的 category_overrules 关键词规则强制归类，未命中的才走 LLM
     config = load_config()
     categories = config.get("categories")
-    records = parse_category(records, client, categories=categories)
+    overrides = config.get("category_overrides", {}) or {}
+
+    def apply_overrides(recs):
+        pending, overridden = [], []
+        for r in recs:
+            hit = next((cat for kw, cat in overrides.items() if kw in r["description"]), None)
+            if hit is not None:
+                r["category"] = hit
+                overridden.append(r)
+                print(f"🔁 规则命中：{r['description']} --> {hit}")
+            else:
+                pending.append(r)
+        return pending, overridden
+
+    pending, overridden = apply_overrides(records)
+
+    base_url = os.getenv("OPENAI_API_URL")
+    api_key = os.getenv("OPENAI_API_KEY")
+    classified = []
+    if pending:
+        if not base_url or not api_key:
+            print("错误：请在 .env 中配置 OPENAI_API_URL 和 OPENAI_API_KEY")
+            raise SystemExit(1)
+        client = OpenAI(base_url=base_url, api_key=api_key)
+        classified = parse_category(pending, client, categories=categories)
+    records = classified + overridden
 
     # 3. 生成 iCost URL
     card_account_map = config.get("card_account_map", {})
