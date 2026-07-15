@@ -3,7 +3,7 @@
 注意：iCost 注册的 URL scheme 是小写 icost（大小写敏感，iCost:// 不会路由）。
 account 必须与 iCost 内存在的账户名逐字一致，否则 iCost 会静默忽略该请求。
 icost://expense?[...]  消费
-icost://income?[...]   退款（作为收入）
+icost://income?[...]   退款/退货（作为收入）
 """
 import subprocess
 import time
@@ -41,7 +41,7 @@ def to_icost_urls(records: list, card_account_map: dict = None) -> list:
     card_account_map = card_account_map or {}
     urls = []
     for r in records:
-        is_income = r.get("txn_type") == "退款"
+        is_income = r.get("txn_type") in ("退款", "退货")
         scheme = "income" if is_income else "expense"
         amount = abs(r["amount_value"])
         # 一级分类：取 LLM 分类中 "/" 前的部分

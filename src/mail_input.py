@@ -15,8 +15,8 @@ IMAP_PORT = 993
 # 日期标题：2026/07/13 您的消费明细如下：
 DATE_RE = re.compile(r"(\d{4})/(\d{2})/(\d{2})\s*您的消费明细如下")
 TIME_RE = re.compile(r"(\d{2}):(\d{2}):(\d{2})")
-AMOUNT_RE = re.compile(r"CNY\s+([\d,]+\.\d+)")
-DESC_RE = re.compile(r"尾号\s*(\d+)\s+(消费|退款)\s+(.+)")
+AMOUNT_RE = re.compile(r"CNY\s+(-?[\d,]+\.\d+)")
+DESC_RE = re.compile(r"尾号\s*(\d+)\s+(消费|退款|退货)\s+(.+)")
 
 
 def _decode_str(value):
@@ -70,6 +70,14 @@ def _strip_html(html: str) -> str:
     return htmlmod.unescape(html)
 
 
+def fetch_imap_conn(user: str, authcode: str):
+    """连接 QQ 邮箱并选中 INBOX，返回已登录的 IMAP4_SSL 对象（调用方负责 logout）。"""
+    mbox = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+    mbox.login(user, authcode)
+    mbox.select("INBOX")
+    return mbox
+
+
 def fetch_bill_mail(user: str, authcode: str, from_addr: str = "ccsvc@message.cmbchina.com",
                     subject_keyword: str = "消费明细", recent: int = 20) -> str:
     """连接 QQ 邮箱 IMAP，取最近一封账单邮件正文。
@@ -86,10 +94,8 @@ def fetch_bill_mail(user: str, authcode: str, from_addr: str = "ccsvc@message.cm
     Returns:
         邮件正文纯文本。
     """
-    mbox = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+    mbox = fetch_imap_conn(user, authcode)
     try:
-        mbox.login(user, authcode)
-        mbox.select("INBOX")
         # 按发件人服务端过滤（FROM 为 ASCII，不触发中文编码问题）
         typ, data = mbox.search(None, "FROM", f'"{from_addr}"')
         if typ != "OK" or not data or not data[0]:
