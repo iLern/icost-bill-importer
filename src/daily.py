@@ -62,10 +62,11 @@ def main():
         print("错误：请在 .env 中配置 OPENAI_API_URL 和 OPENAI_API_KEY")
         raise SystemExit(1)
     client = OpenAI(base_url=base_url, api_key=api_key)
-    records = parse_category(records, client)
+    config = load_config()
+    categories = config.get("categories")
+    records = parse_category(records, client, categories=categories)
 
     # 3. 生成 iCost URL
-    config = load_config()
     card_account_map = config.get("card_account_map", {})
     urls = to_icost_urls(records, card_account_map)
 

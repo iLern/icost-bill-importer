@@ -30,7 +30,16 @@ def parse_bills(file_path):
 
     return records
 
-def parse_category(bill_list: list, client: OpenAI) -> list:
+def parse_category(bill_list: list, client: OpenAI, categories: list = None) -> list:
+    if categories is None:
+        categories = ["餐饮", "购物", "生活", "居住", "交通", "医疗健康",
+                      "教育成长", "休闲娱乐", "人情往来", "杂项"]
+    cats_str = "、".join(categories)
+    system_content = (
+        "你是一个财务助理，负责根据交易描述为每笔交易分类。"
+        f"只能从以下分类中选择一个：{cats_str}。"
+        "无法明确归类时选「杂项」。只输出分类名称本身，不要输出任何其他文字或标点。"
+    )
     ret = []
     for record in tqdm(bill_list, desc="分类交易", unit="笔"):
         desc = record["description"].lower()
@@ -40,7 +49,7 @@ def parse_category(bill_list: list, client: OpenAI) -> list:
             messages=[
                 {
                     "role": "system",
-                    "content": "你是一个财务助理，负责根据交易描述为每笔交易分类。类别包括：餐饮、交通、购物、居住、生活、医疗健康、教育成长、人际娱乐、投资理财。只需要给出最后的分类结果。"
+                    "content": system_content,
                 },
                 {
                     "role": "user",
@@ -50,7 +59,12 @@ def parse_category(bill_list: list, client: OpenAI) -> list:
             temperature=0.2,
             max_tokens=10,
         )
-        record["category"] = response.choices[0].message.content.strip()
+        category = response.choices[0].message.content.strip()
+        # 兜底：LLM 偶发输出列表外的分类（幻觉/带标点），归为杂项避免 iCost 静默漏记
+        if category not in categories:
+            tqdm.write(f"⚠️ 分类「{category}」不在列表中，归为杂项")
+            category = "杂项"
+        record["category"] = category
         tqdm.write(f"分类结果：{record['category']}")
         ret.append(record)
     return ret
