@@ -70,13 +70,14 @@ def _strip_html(html: str) -> str:
     return htmlmod.unescape(html)
 
 
-def fetch_bill_mail(user: str, authcode: str, subject_keyword: str = "消费明细") -> str:
+def fetch_bill_mail(user: str, authcode: str, subject_keyword: str = "消费明细", recent: int = 20) -> str:
     """连接 QQ 邮箱 IMAP，取最近一封匹配主题的账单邮件正文。
 
     Args:
         user: QQ 邮箱地址，如 xxx@qq.com
         authcode: QQ 邮箱 IMAP 授权码（非登录密码）
-        subject_keyword: 用于筛选账单邮件的主题关键词
+        subject_keyword: 用于识别账单邮件的正文关键词
+        recent: 从收件箱最新往前回溯多少封来查找
     Returns:
         邮件正文纯文本。
     """
@@ -84,17 +85,23 @@ def fetch_bill_mail(user: str, authcode: str, subject_keyword: str = "消费明�
     try:
         mbox.login(user, authcode)
         mbox.select("INBOX")
-        # 按主题关键词搜索；取最新一封
-        typ, data = mbox.search(None, f'SUBJECT "{subject_keyword}"')
+        # 不能用中文做 IMAP SEARCH 参数（imaplib 以 ASCII 编码，中文会报错）。
+        # 改为拉取最近若干封邮件，逐封解析正文，取最新一封含账单标识的。
+        typ, data = mbox.search(None, "ALL")
         if typ != "OK" or not data or not data[0]:
-            raise RuntimeError(f"未找到主题包含「{subject_keyword}」的邮件")
+            raise RuntimeError("收件箱为空或搜索失败")
         ids = data[0].split()
-        latest_id = ids[-1]
-        typ, msg_data = mbox.fetch(latest_id, "(RFC822)")
-        if typ != "OK":
-            raise RuntimeError("拉取邮件失败")
-        msg = email.message_from_bytes(msg_data[0][1])
-        return _get_body(msg)
+        # 从最新往前找，最多回溯 recent 个
+        scan = list(reversed(ids))[:recent]
+        for uid in scan:
+            typ, msg_data = mbox.fetch(uid, "(RFC822)")
+            if typ != "OK":
+                continue
+            msg = email.message_from_bytes(msg_data[0][1])
+            body = _get_body(msg)
+            if subject_keyword in body:
+                return body
+        raise RuntimeError(f"最近 {len(scan)} 封邮件中均未找到含「{subject_keyword}」的账单邮件")
     finally:
         try:
             mbox.logout()
