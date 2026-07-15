@@ -70,14 +70,19 @@ def _strip_html(html: str) -> str:
     return htmlmod.unescape(html)
 
 
-def fetch_bill_mail(user: str, authcode: str, subject_keyword: str = "消费明细", recent: int = 20) -> str:
-    """连接 QQ 邮箱 IMAP，取最近一封匹配主题的账单邮件正文。
+def fetch_bill_mail(user: str, authcode: str, from_addr: str = "ccsvc@message.cmbchina.com",
+                    subject_keyword: str = "消费明细", recent: int = 20) -> str:
+    """连接 QQ 邮箱 IMAP，取最近一封账单邮件正文。
+
+    先用 IMAP SEARCH FROM 按发件人（ASCII）服务端过滤，避免中文 SEARCH 编码报错；
+    再从命中邮件里从新到旧取最近 recent 封，返回首封正文含账单标识的。
 
     Args:
         user: QQ 邮箱地址，如 xxx@qq.com
         authcode: QQ 邮箱 IMAP 授权码（非登录密码）
-        subject_keyword: 用于识别账单邮件的正文关键词
-        recent: 从收件箱最新往前回溯多少封来查找
+        from_addr: 账单邮件发件人地址（招商银行信用卡默认 ccsvc@message.cmbchina.com）
+        subject_keyword: 用于二次确认账单邮件的正文关键词
+        recent: 从发件人命中邮件里从新到旧最多回溯多少封来查找
     Returns:
         邮件正文纯文本。
     """
@@ -85,13 +90,12 @@ def fetch_bill_mail(user: str, authcode: str, subject_keyword: str = "消费明�
     try:
         mbox.login(user, authcode)
         mbox.select("INBOX")
-        # 不能用中文做 IMAP SEARCH 参数（imaplib 以 ASCII 编码，中文会报错）。
-        # 改为拉取最近若干封邮件，逐封解析正文，取最新一封含账单标识的。
-        typ, data = mbox.search(None, "ALL")
+        # 按发件人服务端过滤（FROM 为 ASCII，不触发中文编码问题）
+        typ, data = mbox.search(None, "FROM", f'"{from_addr}"')
         if typ != "OK" or not data or not data[0]:
-            raise RuntimeError("收件箱为空或搜索失败")
+            raise RuntimeError(f"未找到发件人为 {from_addr} 的邮件")
         ids = data[0].split()
-        # 从最新往前找，最多回溯 recent 个
+        # 命中邮件从新到旧，最多回溯 recent 封
         scan = list(reversed(ids))[:recent]
         for uid in scan:
             typ, msg_data = mbox.fetch(uid, "(RFC822)")
@@ -101,7 +105,7 @@ def fetch_bill_mail(user: str, authcode: str, subject_keyword: str = "消费明�
             body = _get_body(msg)
             if subject_keyword in body:
                 return body
-        raise RuntimeError(f"最近 {len(scan)} 封邮件中均未找到含「{subject_keyword}」的账单邮件")
+        raise RuntimeError(f"发件人 {from_addr} 的最近 {len(scan)} 封邮件均不含「{subject_keyword}」")
     finally:
         try:
             mbox.logout()
