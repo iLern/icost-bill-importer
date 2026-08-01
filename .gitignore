@@ -9,3 +9,4 @@ logs/
 test/
 
 .DS_Store
+launchd/*
