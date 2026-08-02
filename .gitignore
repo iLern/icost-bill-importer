@@ -6,7 +6,11 @@ __pycache__/*
 .env
 .venv/
 logs/
-test/
+
+# 真实配置含个人卡号/账户名/商家清单，不入库；用 config.example.json 作模板
+src/config.json
+
+# 本地 Claude Code 开发约定，含个人路径，不入库
+CLAUDE.md
 
 .DS_Store
-launchd/*

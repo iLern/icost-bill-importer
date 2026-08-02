@@ -2,6 +2,8 @@
 
 信用卡账单自动记账工具，写入 iCost。支持两种粒度：
 
+> **平台**：仅 macOS。天粒度自动记账依赖 macOS 的 `open` 命令触发 iCost URL scheme，定时任务依赖 launchd。月度批处理跨平台可用，但需自行配置。
+
 - **月度批处理**（`src/main.py`）：整月账单 `.txt` → LLM 分类 → Excel，手动导入 iCost。
 - **天粒度自动记账**（`src/daily.py`）：每天定时读 QQ 邮箱账单邮件 → 解析 → LLM 分类 → 通过 iCost x-callback-url 自动写入。
 
@@ -49,13 +51,21 @@ python3 -m venv .venv
 
 ### 定时任务（launchd）
 
+仓库提供了模板 `launchd/com.example.bill-daily.plist`，使用前需替换其中的 `<REPO_DIR>`（仓库绝对路径）和 `<LABEL>`（你的标识，如 `com.yourname.bill-daily`），并确保 `<REPO_DIR>/logs` 目录已存在。
+
 ```bash
-mkdir -p ~/Library/LaunchAgents logs
-cp launchd/com.leyan.bill-daily.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.leyan.bill-daily.plist
+# 1. 复制并替换占位符（以 sed 为例，LABEL 自行修改）
+cp launchd/com.example.bill-daily.plist ~/Library/LaunchAgents/com.yourname.bill-daily.plist
+sed -i '' "s#<REPO_DIR>#$(pwd)#g" ~/Library/LaunchAgents/com.yourname.bill-daily.plist
+# 之后用编辑器把 <LABEL> 改成 com.yourname.bill-daily
+
+mkdir -p logs
+
+# 2. 加载
+launchctl load ~/Library/LaunchAgents/com.yourname.bill-daily.plist
 
 # 手动触发一次测试
-launchctl start com.leyan.bill-daily
+launchctl start com.yourname.bill-daily
 # 查看日志
 tail -f logs/daily.out.log
 ```
@@ -63,7 +73,7 @@ tail -f logs/daily.out.log
 卸载：
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.leyan.bill-daily.plist
+launchctl unload ~/Library/LaunchAgents/com.yourname.bill-daily.plist
 ```
 
 ## 月度批处理

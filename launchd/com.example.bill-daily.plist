@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  天粒度自动记账 launchd 模板。
+
+  使用前替换：
+    1. <REPO_DIR>  → 本仓库在你机器上的绝对路径，如 /Users/you/code/bill-stats
+    2. <LABEL>      → 改成你自己的反向域名标识，如 com.yourname.bill-daily
+  替换后另存为 ~/Library/LaunchAgents/<LABEL>.plist 再 launchctl load。
+  注：日志目录需提前 mkdir -p <REPO_DIR>/logs
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string><LABEL></string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string><REPO_DIR>/.venv/bin/python</string>
+        <string><REPO_DIR>/src/daily.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string><REPO_DIR></string>
+
+    <!-- 每天下午 15:00 触发 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>15</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string><REPO_DIR>/logs/daily.out.log</string>
+    <key>StandardErrorPath</key>
+    <string><REPO_DIR>/logs/daily.err.log</string>
+
+    <!-- 错过触发时间（如关机），开机后不补跑；需补跑可改 true -->
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
