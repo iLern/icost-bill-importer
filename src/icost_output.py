@@ -64,24 +64,30 @@ def to_icost_urls(records: list, card_account_map: dict = None) -> list:
     return urls
 
 
-def trigger(urls: list, dry_run: bool = False, delay: float = 1.0) -> None:
-    """逐条触发 iCost URL。
+def trigger(urls: list, dry_run: bool = False, delay: float = 1.0) -> list:
+    """逐条触发 iCost URL，返回每条是否成功的布尔列表（与 urls 等长、顺序一致）。
 
-    dry_run=True 时仅打印 URL，便于首次验证参数；否则用 open 触发。
+    dry_run=True 时仅打印 URL（视为成功），便于首次验证参数；否则用 open 触发。
+    返回值用于调用方做「成功才记入已处理」的去重判定。
     """
     total = len(urls)
     if total == 0:
         print("⚠️  没有需要写入的交易")
-        return
+        return []
 
+    results = []
     for idx, url in enumerate(urls, 1):
         if dry_run:
             print(f"[{idx}/{total}] (dry-run) {url}")
+            results.append(True)
             continue
         try:
             subprocess.run(["open", url], check=True)
             print(f"[{idx}/{total}] ✅ 已触发：{url}")
+            results.append(True)
         except Exception as e:
             print(f"[{idx}/{total}] ❌ 触发失败：{e}\n    {url}")
+            results.append(False)
         if idx < total:
             time.sleep(delay)
+    return results

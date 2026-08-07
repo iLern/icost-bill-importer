@@ -6,6 +6,7 @@ __pycache__/*
 .env
 .venv/
 logs/
+.build/
 
 # 真实配置含个人卡号/账户名/商家清单，不入库；用 config.example.json 作模板
 src/config.json

@@ -17,6 +17,7 @@ from openai import OpenAI  # noqa: E402
 from main import parse_category  # noqa: E402
 from mail_input import fetch_bill_mail, parse_mail_body  # noqa: E402
 from icost_output import to_icost_urls, trigger  # noqa: E402
+from dedup import ProcessedStore  # noqa: E402
 
 
 def load_config() -> dict:
@@ -50,6 +51,24 @@ def main():
 
     if not records:
         print("今天没有交易，结束。")
+        return
+
+    # 去重：跳过已成功写入 iCost 的交易，避免 launchd 多次触发导致重复记账
+    # （fetch_bill_mail 总是返回最新那封邮件的全部交易；同一封邮件被重跑时，
+    # 已写入的应当跳过而非再次 open 触发。）
+    store = ProcessedStore()
+    fresh, skipped = [], []
+    for r in records:
+        if store.has(r):
+            skipped.append(r)
+        else:
+            fresh.append(r)
+    if skipped:
+        print(f"⏭️  跳过 {len(skipped)} 笔已写入交易："
+              + ", ".join(f"{s['description']}({s['amount_value']})" for s in skipped))
+    records = fresh
+    if not records:
+        print("所有交易均已写入，结束。")
         return
 
     if args.max > 0:
@@ -89,9 +108,13 @@ def main():
     card_account_map = config.get("card_account_map", {})
     urls = to_icost_urls(records, card_account_map)
 
-    # 4. 触发
+    # 4. 触发（成功才记入已处理，失败下次重试）
     print(f"\n🚀 准备写入 iCost（dry_run={args.dry_run}）")
-    trigger(urls, dry_run=args.dry_run)
+    results = trigger(urls, dry_run=args.dry_run)
+    if not args.dry_run:
+        for r, ok in zip(records, results):
+            if ok:
+                store.mark(r)
     print("\n🎉 完成")
 
 
