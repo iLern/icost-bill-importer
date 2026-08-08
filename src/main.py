@@ -34,6 +34,10 @@ def parse_category(bill_list: list, client: OpenAI, categories: list = None) -> 
     if categories is None:
         categories = ["餐饮", "购物", "生活", "居住", "交通", "医疗健康",
                       "教育成长", "休闲娱乐", "人情往来", "杂项"]
+    model = os.getenv("OPENAI_MODEL")
+    if not model:
+        print("错误：请在 .env 中配置 OPENAI_MODEL（DeepSeek 官方：deepseek-chat / deepseek-v4-flash）")
+        raise SystemExit(1)
     cats_str = "、".join(categories)
     system_content = (
         "你是一个财务助理，负责根据交易描述为每笔交易分类。"
@@ -45,7 +49,7 @@ def parse_category(bill_list: list, client: OpenAI, categories: list = None) -> 
         desc = record["description"].lower()
         tqdm.write(f"正在处理交易描述：{desc} --> ", end="")
         response = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3.2"),
+            model=model,
             messages=[
                 {
                     "role": "system",
@@ -57,7 +61,9 @@ def parse_category(bill_list: list, client: OpenAI, categories: list = None) -> 
                 }
             ],
             temperature=0.2,
-            max_tokens=10,
+            # 推理型模型（如 deepseek-v4-flash）的 reasoning 会先消耗 token，
+            # 10 太小会被吃光导致 content 为空、误归「杂项」，64 足够输出分类名
+            max_tokens=64,
         )
         category = response.choices[0].message.content.strip()
         # 兜底：LLM 偶发输出列表外的分类（幻觉/带标点），归为杂项避免 iCost 静默漏记
