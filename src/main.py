@@ -1,9 +1,11 @@
 import argparse
 import os
-from openai import OpenAI
+from openai import OpenAI, APIConnectionError, APITimeoutError, InternalServerError
 import pandas as pd
 from tqdm import tqdm
 import datetime
+
+from retry import retry
 
 def parse_bills(file_path):
     records = []
@@ -36,7 +38,7 @@ def parse_category(bill_list: list, client: OpenAI, categories: list = None) -> 
                       "教育成长", "休闲娱乐", "人情往来", "杂项"]
     model = os.getenv("OPENAI_MODEL")
     if not model:
-        print("错误：请在 .env 中配置 OPENAI_MODEL（DeepSeek 官方：deepseek-chat / deepseek-v4-flash）")
+        print("错误：请在 .env 中配置 OPENAI_MODEL（DeepSeek 官方：deepseek-v4-pro / deepseek-v4-flash）")
         raise SystemExit(1)
     cats_str = "、".join(categories)
     system_content = (
@@ -48,22 +50,26 @@ def parse_category(bill_list: list, client: OpenAI, categories: list = None) -> 
     for record in tqdm(bill_list, desc="分类交易", unit="笔"):
         desc = record["description"].lower()
         tqdm.write(f"正在处理交易描述：{desc} --> ", end="")
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_content,
-                },
-                {
-                    "role": "user",
-                    "content": f"请根据以下交易描述为其分类：'{desc}'。"
-                }
-            ],
-            temperature=0.2,
-            # 推理型模型（如 deepseek-v4-flash）的 reasoning 会先消耗 token，
-            # 10 太小会被吃光导致 content 为空、误归「杂项」，64 足够输出分类名
-            max_tokens=64,
+        response = retry(
+            lambda: client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_content,
+                    },
+                    {
+                        "role": "user",
+                        "content": f"请根据以下交易描述为其分类：'{desc}'。"
+                    }
+                ],
+                temperature=0.2,
+                # 推理型模型（如 deepseek-v4-flash）的 reasoning 会先消耗 token，
+                # 10 太小会被吃光导致 content 为空、误归「杂项」，64 足够输出分类名
+                max_tokens=64,
+            ),
+            attempts=3,
+            exceptions=(APIConnectionError, APITimeoutError, InternalServerError),
         )
         category = response.choices[0].message.content.strip()
         # 兜底：LLM 偶发输出列表外的分类（幻觉/带标点），归为杂项避免 iCost 静默漏记

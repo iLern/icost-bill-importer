@@ -8,6 +8,8 @@ import imaplib
 import re
 from email.header import decode_header
 
+from retry import retry
+
 
 IMAP_HOST = "imap.qq.com"
 IMAP_PORT = 993
@@ -93,30 +95,35 @@ def fetch_bill_mail(user: str, authcode: str, from_addr: str = "ccsvc@message.cm
         recent: 从发件人命中邮件里从新到旧最多回溯多少封来查找
     Returns:
         邮件正文纯文本。
+
+    网络层瞬时异常（DNS / 连接 / IMAP 协议）会指数退避重试 3 次；
+    业务异常（未找到邮件）直接抛出不重试。
     """
-    mbox = fetch_imap_conn(user, authcode)
-    try:
-        # 按发件人服务端过滤（FROM 为 ASCII，不触发中文编码问题）
-        typ, data = mbox.search(None, "FROM", f'"{from_addr}"')
-        if typ != "OK" or not data or not data[0]:
-            raise RuntimeError(f"未找到发件人为 {from_addr} 的邮件")
-        ids = data[0].split()
-        # 命中邮件从新到旧，最多回溯 recent 封
-        scan = list(reversed(ids))[:recent]
-        for uid in scan:
-            typ, msg_data = mbox.fetch(uid, "(RFC822)")
-            if typ != "OK":
-                continue
-            msg = email.message_from_bytes(msg_data[0][1])
-            body = _get_body(msg)
-            if subject_keyword in body:
-                return body
-        raise RuntimeError(f"发件人 {from_addr} 的最近 {len(scan)} 封邮件均不含「{subject_keyword}」")
-    finally:
+    def _fetch_once() -> str:
+        mbox = fetch_imap_conn(user, authcode)
         try:
-            mbox.logout()
-        except Exception:
-            pass
+            # 按发件人服务端过滤（FROM 为 ASCII，不触发中文编码问题）
+            typ, data = mbox.search(None, "FROM", f'"{from_addr}"')
+            if typ != "OK" or not data or not data[0]:
+                raise RuntimeError(f"未找到发件人为 {from_addr} 的邮件")
+            ids = data[0].split()
+            # 命中邮件从新到旧，最多回溯 recent 封
+            scan = list(reversed(ids))[:recent]
+            for uid in scan:
+                typ, msg_data = mbox.fetch(uid, "(RFC822)")
+                if typ != "OK":
+                    continue
+                msg = email.message_from_bytes(msg_data[0][1])
+                body = _get_body(msg)
+                if subject_keyword in body:
+                    return body
+            raise RuntimeError(f"发件人 {from_addr} 的最近 {len(scan)} 封邮件均不含「{subject_keyword}」")
+        finally:
+            try:
+                mbox.logout()
+            except Exception:
+                pass
+    return retry(_fetch_once, attempts=3, exceptions=(OSError, imaplib.IMAP4.error))
 
 
 def parse_mail_body(text: str) -> list:
