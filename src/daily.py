@@ -71,11 +71,25 @@ def main():
         print("所有交易均已写入，结束。")
         return
 
+    # 账户准入：卡号未配置在 card_account_map 的记录，URL 会退回用卡号当账户名，
+    # iCost 对账户名不匹配的请求是静默忽略（等于没写）；若照旧触发并按 open 成功
+    # 标记“已写入”，这笔会被永久误判为完成。故此类记录不触发、不标记、打错提醒，
+    # 在 config.json 补上映射后下次运行自动补写。
+    config = load_config()
+    card_account_map = config.get("card_account_map", {}) or {}
+    unmapped = [r for r in records if r["card_number"] not in card_account_map]
+    for r in unmapped:
+        print(f"❌ 卡号 {r['card_number']} 未配置在 card_account_map，本次不写入："
+              f"{r['description']} ({r['amount_value']}) —— 补配置后下次自动补写")
+    records = [r for r in records if r["card_number"] in card_account_map]
+    if not records:
+        print("没有账户已配置的交易，结束。")
+        return
+
     if args.max > 0:
         records = records[: args.max]
 
-    # 2. 分类：先按 config 的 category_overrules 关键词规则强制归类，未命中的才走 LLM
-    config = load_config()
+    # 3. 分类：先按 config 的 category_overrules 关键词规则强制归类，未命中的才走 LLM
     categories = config.get("categories")
     overrides = config.get("category_overrides", {}) or {}
 
@@ -104,11 +118,10 @@ def main():
         classified = parse_category(pending, client, categories=categories)
     records = classified + overridden
 
-    # 3. 生成 iCost URL
-    card_account_map = config.get("card_account_map", {})
+    # 4. 生成 iCost URL（records 已保证卡号都在 card_account_map 内）
     urls = to_icost_urls(records, card_account_map)
 
-    # 4. 触发（成功才记入已处理，失败下次重试）
+    # 5. 触发（成功才记入已处理，失败下次重试）
     print(f"\n🚀 准备写入 iCost（dry_run={args.dry_run}）")
     results = trigger(urls, dry_run=args.dry_run)
     if not args.dry_run:
