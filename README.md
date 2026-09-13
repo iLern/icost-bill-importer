@@ -47,7 +47,17 @@ python3 -m venv .venv
 
 # 真实触发，写入 iCost
 .venv/bin/python src/daily.py
+
+# 按日期回溯补账：定时任务漏跑（断网 / 机器没开）后用，可一次给多个日期
+# 支持 YYYY-MM-DD / YYYY.MM.DD / YYYY/MM/DD / YYYYMMDD
+.venv/bin/python src/daily.py --dry-run --date 2026-09-11 2026-09-13
+.venv/bin/python src/daily.py --date 2026-09-11
 ```
+
+`--date` 按邮件正文标题里的交易日期匹配（不是收信时间），逐封解析后合并写入；
+已写入过的交易仍会被 `logs/processed.jsonl` 去重跳过，所以可以放心重复执行。
+某个日期在邮箱里找不到对应邮件时，会打印实际扫到的日期范围并以非 0 退出，
+该日期不写入（其余日期照常处理）。
 
 ### 定时任务（launchd）
 

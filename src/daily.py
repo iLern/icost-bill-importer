@@ -2,11 +2,15 @@
 
 流程：IMAP 读账单邮件 → 解析邮件正文 → LLM 分类 → 生成 iCost URL → 触发 iCost。
 被 launchd 每天定时无人值守运行。也可手动 `python src/daily.py --dry-run` 调试。
+
+定时任务漏跑（断网 / 机器没开）后用 `--date` 按日期回溯补账：
+`python src/daily.py --date 2026-09-11 2026-09-13`。
 """
 import argparse
 import json
 import os
 import sys
+from datetime import datetime
 
 # 确保能 import 同目录下的 main / mail_input / icost_output
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -29,10 +33,62 @@ def load_config() -> dict:
     return {"card_account_map": {}}
 
 
+# --date 接受的日期写法，统一归一化成 iCost 的 YYYY.MM.DD
+_DATE_FORMATS = ("%Y-%m-%d", "%Y.%m.%d", "%Y/%m/%d", "%Y%m%d")
+
+
+def normalize_date(raw: str) -> str:
+    """把命令行日期（2026-09-11 / 2026.09.11 / 2026/09/11 / 20260911）转成 2026.09.11。"""
+    text = raw.strip()
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y.%m.%d")
+        except ValueError:
+            continue
+    raise SystemExit(f"错误：无法识别日期「{raw}」，请用 YYYY-MM-DD（如 2026-09-11）")
+
+
+def fetch_records_by_date(mail_user: str, mail_authcode: str, target_dates: list):
+    """按日期逐封回溯拉取账单邮件并解析，返回 (records, failed_dates)。
+
+    逐封 parse、而不是把多封正文拼起来再 parse 一次：parse_mail_body 只认第一个
+    日期标题，拼接后会把后面几天的交易全记成第一天的日期。
+    """
+    records, failed = [], []
+    for d in target_dates:
+        print(f"📧 正在拉取 {d} 的账单邮件...")
+        try:
+            body = fetch_bill_mail(mail_user, mail_authcode, target_date=d)
+            recs = parse_mail_body(body)
+        except RuntimeError as e:
+            print(f"❌ {d}：{e}")
+            failed.append(d)
+            continue
+        # 双保险：正文标题日期与请求日期不符就不写，宁可漏记也不把账记到错日期上
+        if any(r["date"] != d for r in recs):
+            got = recs[0]["date"] if recs else "未知"
+            print(f"❌ {d}：邮件正文日期为 {got}，与请求不符，跳过")
+            failed.append(d)
+            continue
+        print(f"📩 {d} 解析到 {len(recs)} 笔交易")
+        records.extend(recs)
+    return records, failed
+
+
+def _exit_if_failed(failed_dates: list) -> None:
+    """有日期没取到邮件时非 0 退出：回溯补账最怕「以为补上了，其实没补」。"""
+    if failed_dates:
+        print(f"⚠️  以下日期未取到邮件，本次未处理：{', '.join(failed_dates)}")
+        raise SystemExit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description="天粒度账单：读邮件 → 分类 → 写入 iCost")
     parser.add_argument("--dry-run", action="store_true", help="只打印 iCost URL，不触发")
     parser.add_argument("--max", type=int, default=0, help="只处理前 N 条（调试用，0=全部）")
+    parser.add_argument("--date", nargs="+", default=None, metavar="YYYY-MM-DD",
+                        help="按日期回溯补账，可给多个（如 --date 2026-09-11 2026-09-13）；"
+                             "缺省处理最新一封邮件")
     args = parser.parse_args()
 
     load_dotenv()  # 从项目根 .env 读取密钥
@@ -43,14 +99,20 @@ def main():
         print("错误：请在 .env 中配置 MAIL_USER 和 MAIL_AUTHCODE（QQ 邮箱 IMAP 授权码）")
         raise SystemExit(1)
 
-    # 1. 读邮件并解析
-    print("📧 正在拉取账单邮件...")
-    body = fetch_bill_mail(mail_user, mail_authcode)
-    records = parse_mail_body(body)
-    print(f"📩 解析到 {len(records)} 笔交易")
+    # 1. 读邮件并解析：--date 按指定日期逐封回溯，否则取最新一封（定时任务的日常路径）
+    if args.date:
+        target_dates = [normalize_date(d) for d in args.date]
+        records, failed_dates = fetch_records_by_date(mail_user, mail_authcode, target_dates)
+    else:
+        print("📧 正在拉取账单邮件...")
+        body = fetch_bill_mail(mail_user, mail_authcode)
+        records = parse_mail_body(body)
+        print(f"📩 解析到 {len(records)} 笔交易")
+        failed_dates = []
 
     if not records:
-        print("今天没有交易，结束。")
+        print("指定的日期都没有交易，结束。" if args.date else "今天没有交易，结束。")
+        _exit_if_failed(failed_dates)
         return
 
     # 去重：跳过已成功写入 iCost 的交易，避免 launchd 多次触发导致重复记账
@@ -69,6 +131,7 @@ def main():
     records = fresh
     if not records:
         print("所有交易均已写入，结束。")
+        _exit_if_failed(failed_dates)
         return
 
     # 账户准入：卡号未配置在 card_account_map 的记录，URL 会退回用卡号当账户名，
@@ -84,6 +147,7 @@ def main():
     records = [r for r in records if r["card_number"] in card_account_map]
     if not records:
         print("没有账户已配置的交易，结束。")
+        _exit_if_failed(failed_dates)
         return
 
     if args.max > 0:
@@ -129,6 +193,7 @@ def main():
             if ok:
                 store.mark(r)
     print("\n🎉 完成")
+    _exit_if_failed(failed_dates)
 
 
 if __name__ == "__main__":
