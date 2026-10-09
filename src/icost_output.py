@@ -44,6 +44,10 @@ def to_icost_urls(records: list, card_account_map: dict = None) -> list:
         is_income = r.get("txn_type") in ("退款", "退货")
         scheme = "income" if is_income else "expense"
         amount = abs(r["amount_value"])
+        # 外币交易：人民币金额是按当日额度差折算的估值，备注里留原币金额备查
+        remark = r["description"]
+        if r.get("currency") and r["currency"] != "CNY":
+            remark = f"{remark}（{r['currency']} {r['RMB_amount']}）"
         # 一级分类：取 LLM 分类中 "/" 前的部分
         category = r.get("category", "")
         category = category.split("/")[0] if category else ""
@@ -56,7 +60,7 @@ def to_icost_urls(records: list, card_account_map: dict = None) -> list:
             "category": category,
             "date": r["date"],
             "time": r["time"],
-            "remark": r["description"],
+            "remark": remark,
         }
         # 空格与中文原样保留（见 _icost_quote 说明）
         query = "&".join(f"{k}={_icost_quote(v)}" for k, v in params.items())

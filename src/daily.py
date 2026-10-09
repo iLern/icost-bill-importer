@@ -10,7 +10,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 确保能 import 同目录下的 main / mail_input / icost_output
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -19,7 +19,8 @@ from dotenv import load_dotenv  # noqa: E402
 from openai import OpenAI  # noqa: E402
 
 from main import parse_category  # noqa: E402
-from mail_input import fetch_bill_mail, parse_mail_body  # noqa: E402
+from mail_input import (fetch_bill_mail, fetch_prev_credit, parse_credit,  # noqa: E402
+                        parse_mail_body, convert_foreign)
 from icost_output import to_icost_urls, trigger  # noqa: E402
 from dedup import ProcessedStore  # noqa: E402
 
@@ -48,13 +49,49 @@ def normalize_date(raw: str) -> str:
     raise SystemExit(f"错误：无法识别日期「{raw}」，请用 YYYY-MM-DD（如 2026-09-11）")
 
 
+def _prev_date(date: str) -> str:
+    """iCost 日期格式的前一天（2026.09.27 → 2026.09.26）。"""
+    return (datetime.strptime(date, "%Y.%m.%d") - timedelta(days=1)).strftime("%Y.%m.%d")
+
+
+def apply_fx(records: list, date: str, cur_body: str, mail_user: str,
+             mail_authcode: str, bodies: dict = None):
+    """有外币交易时，按当日额度变动折算成人民币。返回 (records, ok)。
+
+    ok=False 表示取不到可信汇率：此时外币交易被剔除（不写、不标记，下次运行会重试），
+    人民币交易保留。调用方应当把它计入失败日期，避免无人值守时静默漏记整趟行程。
+    """
+    if not any(r["currency"] != "CNY" for r in records):
+        return records, True
+
+    bodies = bodies or {}
+    prev_date = _prev_date(date)
+    if prev_date in bodies:
+        # 回溯补账时前一封往往就是上一个目标日期，省一次 IMAP 拉取
+        ref, credit_prev = prev_date, parse_credit(bodies[prev_date])
+    else:
+        try:
+            ref, credit_prev = fetch_prev_credit(mail_user, mail_authcode, before_date=date)
+        except RuntimeError as e:
+            print(f"❌ {date} 有外币交易但取不到折算基准：{e}")
+            return [r for r in records if r["currency"] == "CNY"], False
+
+    rate = convert_foreign(records, credit_prev, parse_credit(cur_body))
+    if rate is None:
+        print(f"❌ {date} 有外币交易但额度缺失，无法折算（基准 {ref}）")
+        return [r for r in records if r["currency"] == "CNY"], False
+    print(f"💱 {date} 外币按 {ref} 的额度差折算，汇率 {rate:.4f}"
+          f"（{sum(1 for r in records if r['currency'] != 'CNY')} 笔）")
+    return records, True
+
+
 def fetch_records_by_date(mail_user: str, mail_authcode: str, target_dates: list):
     """按日期逐封回溯拉取账单邮件并解析，返回 (records, failed_dates)。
 
     逐封 parse、而不是把多封正文拼起来再 parse 一次：parse_mail_body 只认第一个
     日期标题，拼接后会把后面几天的交易全记成第一天的日期。
     """
-    records, failed = [], []
+    bodies, failed = {}, []
     for d in target_dates:
         print(f"📧 正在拉取 {d} 的账单邮件...")
         try:
@@ -70,15 +107,23 @@ def fetch_records_by_date(mail_user: str, mail_authcode: str, target_dates: list
             print(f"❌ {d}：邮件正文日期为 {got}，与请求不符，跳过")
             failed.append(d)
             continue
+        bodies[d] = (body, recs)
         print(f"📩 {d} 解析到 {len(recs)} 笔交易")
+    records = []
+    for d, (body, recs) in bodies.items():
+        # 折算要用到上一封的额度；上一封往往就是上一个目标日期，已在 bodies 里
+        recs, ok = apply_fx(recs, d, body, mail_user, mail_authcode,
+                            {k: v[0] for k, v in bodies.items()})
+        if not ok:
+            failed.append(d)
         records.extend(recs)
     return records, failed
 
 
 def _exit_if_failed(failed_dates: list) -> None:
-    """有日期没取到邮件时非 0 退出：回溯补账最怕「以为补上了，其实没补」。"""
+    """有日期没取到邮件 / 折算失败时非 0 退出：回溯补账最怕「以为补上了，其实没补」。"""
     if failed_dates:
-        print(f"⚠️  以下日期未取到邮件，本次未处理：{', '.join(failed_dates)}")
+        print(f"⚠️  以下日期未完整处理（缺邮件或缺折算基准）：{', '.join(failed_dates)}")
         raise SystemExit(1)
 
 
@@ -109,6 +154,12 @@ def main():
         records = parse_mail_body(body)
         print(f"📩 解析到 {len(records)} 笔交易")
         failed_dates = []
+        if records:
+            # 单封邮件的交易日期一致，取第一条即为本封日期
+            mail_date = records[0]["date"]
+            records, ok = apply_fx(records, mail_date, body, mail_user, mail_authcode)
+            if not ok:
+                failed_dates = [mail_date]
 
     if not records:
         print("指定的日期都没有交易，结束。" if args.date else "今天没有交易，结束。")

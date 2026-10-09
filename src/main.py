@@ -7,6 +7,10 @@ import datetime
 
 from retry import retry
 
+# LLM 返回空分类（推理吃满 max_tokens）时的重试次数，见 parse_category 内注释
+_EMPTY_RETRY = 3
+
+
 def parse_bills(file_path):
     records = []
     with open(file_path, "r", encoding="utf-8") as f:
@@ -47,38 +51,60 @@ def parse_category(bill_list: list, client: OpenAI, categories: list = None) -> 
         "无法明确归类时选「杂项」。只输出分类名称本身，不要输出任何其他文字或标点。"
     )
     ret = []
+    empty_failed = []
     for record in tqdm(bill_list, desc="分类交易", unit="笔"):
         desc = record["description"].lower()
         tqdm.write(f"正在处理交易描述：{desc} --> ", end="")
-        response = retry(
-            lambda: client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system_content,
-                    },
-                    {
-                        "role": "user",
-                        "content": f"请根据以下交易描述为其分类：'{desc}'。"
-                    }
-                ],
-                temperature=0.2,
-                # 推理型模型（如 deepseek-v4-flash）的 reasoning 会先消耗 token，
-                # 10 太小会被吃光导致 content 为空、误归「杂项」，64 足够输出分类名
-                max_tokens=64,
-            ),
-            attempts=3,
-            exceptions=(APIConnectionError, APITimeoutError, InternalServerError),
-        )
-        category = response.choices[0].message.content.strip()
+        category = ""
+        # 空结果重试：见下方 max_tokens 注释。推理长度随机（同一描述实测 70~1024 token
+        # 不等），跑飞的那种重试一次通常就正常了，比直接兜底成「杂项」可靠得多。
+        for attempt in range(1, _EMPTY_RETRY + 1):
+            response = retry(
+                lambda: client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": system_content,
+                        },
+                        {
+                            "role": "user",
+                            "content": f"请根据以下交易描述为其分类：'{desc}'。"
+                        }
+                    ],
+                    temperature=0.2,
+                    # 推理型模型（如 deepseek-v4-flash）会先输出 reasoning 再输出答案，
+                    # 两者共用 max_tokens。设小了推理会把额度吃光、content 为空
+                    # （finish_reason=length），于是每笔都误归「杂项」——不报错、不中断，
+                    # 只是安静地把整天账单记成杂项。设 64 时全军覆没；设 1024 后仍约
+                    # 10% 的单次空结果率（难判断的无品牌小商户推理最长），故配合重试。
+                    # 这只是上限，答案本身只有几个 token，调大不会变慢或变贵。
+                    max_tokens=1024,
+                ),
+                attempts=3,
+                exceptions=(APIConnectionError, APITimeoutError, InternalServerError),
+            )
+            category = (response.choices[0].message.content or "").strip()
+            if category:
+                break
+            if attempt < _EMPTY_RETRY:
+                tqdm.write(f"⚠️ 第 {attempt} 次返回空（推理吃满 max_tokens），重试...")
         # 兜底：LLM 偶发输出列表外的分类（幻觉/带标点），归为杂项避免 iCost 静默漏记
         if category not in categories:
-            tqdm.write(f"⚠️ 分类「{category}」不在列表中，归为杂项")
+            if category:
+                tqdm.write(f"⚠️ 分类「{category}」不在列表中，归为杂项")
+            else:
+                # 重试也没救回来。归「杂项」是本模块一贯的兜底，但这笔的值不值得信，
+                # 收集起来结尾统一报出：无品牌关键词的小商户适合直接写进 category_overrides。
+                empty_failed.append(desc)
+                tqdm.write(f"❌ 重试 {_EMPTY_RETRY} 次仍返回空，归为杂项")
             category = "杂项"
         record["category"] = category
         tqdm.write(f"分类结果：{record['category']}")
         ret.append(record)
+    if empty_failed:
+        print(f"⚠️  有 {len(empty_failed)} 笔因 LLM 返回空被归为杂项，建议补进 "
+              f"config.json 的 category_overrides：" + ", ".join(empty_failed))
     return ret
 
 def reformat(record_list: list) -> list:
